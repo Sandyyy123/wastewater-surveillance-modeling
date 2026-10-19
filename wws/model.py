@@ -1,11 +1,13 @@
 """Forecast reported cases from wastewater signals, validated out of sample.
 
 Target: log10(1 + 7-day mean reported cases per 100k), `horizon` days ahead.
-Features available on the forecast date only (no look-ahead):
-  - smoothed log10 wastewater signal today, 7 days ago and 14 days ago
-  - its 7-day change
-  - the current log10 case level (so the model adds wastewater information
-    on top of what is already known from case reports)
+Features use only samples collected up to the forecast date. Lab turnaround
+and case-report backfill are not modelled here and must be added for real
+operational data. Three feature sets are compared on identical rows:
+  - case trend: current log10 case level, its 7- and 14-day lags and change
+  - wastewater: smoothed log10 wastewater signal today, 7 and 14 days ago,
+    its 7-day change, plus the current case level
+  - combined: both of the above
 Model: ridge regression in closed form (numpy only), standardized features.
 Validation: rolling-origin (expanding window) evaluation. Each fold trains on
 dates strictly before the fold's test block, with a gap equal to the horizon
@@ -30,12 +32,18 @@ def build_features(norm, cases, site_id, horizon=7, column='log10_ratio_pmmov'):
     df['ww_lag7'] = df['ww'].shift(7)
     df['ww_lag14'] = df['ww'].shift(14)
     df['ww_change7'] = df['ww'] - df['ww_lag7']
+    df['cases_lag7'] = df['log_cases'].shift(7)
+    df['cases_lag14'] = df['log_cases'].shift(14)
+    df['cases_change7'] = df['log_cases'] - df['cases_lag7']
     df['target'] = df['log_cases'].shift(-horizon)
     df['site_id'] = site_id
-    return df.dropna(subset=['ww', 'ww_lag7', 'ww_lag14', 'log_cases'])
+    return df.dropna(subset=['ww', 'ww_lag7', 'ww_lag14', 'log_cases', 'cases_lag7', 'cases_lag14'])
 
 
-FEATURES = ('ww', 'ww_lag7', 'ww_lag14', 'ww_change7', 'log_cases')
+CASE_FEATURES = ('log_cases', 'cases_lag7', 'cases_lag14', 'cases_change7')
+WW_FEATURES = ('ww', 'ww_lag7', 'ww_lag14', 'ww_change7', 'log_cases')
+COMBINED_FEATURES = WW_FEATURES + CASE_FEATURES[1:]
+FEATURES = WW_FEATURES
 
 
 class Ridge:
@@ -51,8 +59,6 @@ class Ridge:
         self.b0 = y.mean()
         A = Z.T @ Z + self.alpha * np.eye(Z.shape[1])
         self.coef = np.linalg.solve(A, Z.T @ (y - self.b0))
-        resid = y - self.predict(X)
-        self.q_lo, self.q_hi = np.quantile(resid, [0.05, 0.95])
         return self
 
     def predict(self, X):
@@ -64,8 +70,8 @@ def rolling_origin(df, horizon=7, n_folds=6, test_days=21, min_train=60, alpha=1
                   features=FEATURES):
     """Return per-prediction rows for all folds (all sites pooled per date).
 
-    `features` lets the same evaluation run a cases-only model, which shows
-    whether the wastewater signal adds skill beyond case reports.
+    `features` lets the same evaluation run a fair case-trend model, which
+    tests whether the wastewater signal adds skill beyond case reports.
     """
     data = df.dropna(subset=['target']).sort_index()
     dates = np.array(sorted(data.index.unique()))

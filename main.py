@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from wws.model import build_features, rolling_origin
+from wws.model import CASE_FEATURES, COMBINED_FEATURES, build_features, rolling_origin
 from wws.normalize import normalize, qc_summary
 from wws.simulate import simulate
 from wws.trend import latest_trends
@@ -23,8 +23,9 @@ def run(horizon=7, seed=7, out='outputs'):
     sites = sorted(norm['site_id'].unique())
     feats = pd.concat([build_features(norm, cases, s, horizon) for s in sites])
     preds = rolling_origin(feats, horizon=horizon)
-    # Ablation: the same model without wastewater features.
-    preds_cases = rolling_origin(feats, horizon=horizon, features=('log_cases',))
+    # Fair comparison on identical rows: case trend alone, and both combined.
+    preds_cases = rolling_origin(feats, horizon=horizon, features=CASE_FEATURES)
+    preds_comb = rolling_origin(feats, horizon=horizon, features=COMBINED_FEATURES)
     # Same evaluation with flow/population normalization for comparison.
     feats_flow = pd.concat([build_features(norm, cases, s, horizon, 'log10_load_100k') for s in sites])
     preds_flow = rolling_origin(feats_flow, horizon=horizon)
@@ -36,10 +37,11 @@ def run(horizon=7, seed=7, out='outputs'):
         'folds': int(preds['fold'].nunique()),
         'pmmov_normalized': metrics(preds),
         'flow_population_normalized': metrics(preds_flow),
-        'cases_only_ablation': metrics(preds_cases),
+        'case_trend_only': metrics(preds_cases),
+        'combined_wastewater_and_case_trend': metrics(preds_comb),
         'by_site_pmmov': metrics_by_site(preds),
         'latest_trends': latest_trends(norm, sites).to_dict(orient='records'),
-        'leakage_check': bool((preds['train_end'] < preds['date']).all()),
+        'min_train_test_gap_days': int((preds['date'] - preds['train_end']).dt.days.min()),
     }
     norm.to_csv(out / 'normalized_samples.csv', index=False)
     preds.to_csv(out / 'forecasts_pmmov.csv', index=False)
@@ -55,5 +57,6 @@ if __name__ == '__main__':
     a = ap.parse_args()
     r = run(a.horizon, a.seed, a.out)
     print(json.dumps({k: r[k] for k in ('samples', 'folds', 'pmmov_normalized',
-                                        'flow_population_normalized', 'cases_only_ablation',
-                                        'leakage_check')}, indent=2))
+                                        'flow_population_normalized', 'case_trend_only',
+                                        'combined_wastewater_and_case_trend',
+                                        'min_train_test_gap_days')}, indent=2))

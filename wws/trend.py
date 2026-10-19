@@ -42,12 +42,23 @@ def trend_category(pct, cuts=DEFAULT_CUTS):
     return 'sharply increasing'
 
 
-def latest_trends(norm, sites, column='log10_ratio_pmmov', window=15):
+def latest_trends(norm, sites, column='log10_ratio_pmmov', window=15, max_non_detect=0.5):
+    """Latest 15-day trend per site.
+
+    If more than `max_non_detect` of the samples in the window were below the
+    limit of detection, the slope mostly reflects the substituted value, so
+    the site is reported as 'mostly below detection' instead of a trend.
+    """
     rows = []
     for sid in sites:
         s = daily_signal(norm, sid, column)
+        g = norm[norm['site_id'] == sid]
+        recent = g[g['date'] > s.index.max() - pd.Timedelta(days=window)]
+        nd_share = float(recent['non_detect'].mean()) if len(recent) else 1.0
         pct = window_percent_change(s.to_numpy(), window)
+        category = 'mostly below detection' if nd_share > max_non_detect else trend_category(pct)
         rows.append({'site_id': sid, 'as_of': s.index.max().date().isoformat(),
                      'pct_change_15d': None if np.isnan(pct) else round(pct, 1),
-                     'category': trend_category(pct)})
+                     'non_detect_share_15d': round(nd_share * 100, 1),
+                     'category': category})
     return pd.DataFrame(rows)

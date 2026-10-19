@@ -82,6 +82,16 @@ def test_features_do_not_use_future_samples(data):
 
 def test_end_to_end_wastewater_beats_persistence(tmp_path):
     report = run(out=tmp_path)
-    assert report['leakage_check'] is True
+    assert report['min_train_test_gap_days'] >= 7
     assert report['pmmov_normalized']['skill_vs_persistence_pct'] > 0
+    assert report['case_trend_only']['n_predictions'] == report['pmmov_normalized']['n_predictions']
     assert (tmp_path / 'report.json').is_file()
+
+
+def test_trend_suppressed_when_mostly_non_detects(data):
+    from wws.trend import latest_trends
+    _, _, norm = data
+    forced = norm.copy()
+    forced.loc[forced['site_id'] == 'SITE_A', 'non_detect'] = True
+    out = latest_trends(forced, ['SITE_A']).iloc[0]
+    assert out['category'] == 'mostly below detection'
